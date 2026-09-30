@@ -1,0 +1,192 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  WORKER
+  CLIENT
+  ADMIN
+}
+
+enum LedgerType {
+  DEPOSIT
+  EARNING
+  ESCROW_LOCK
+  ESCROW_RELEASE
+  FEE
+  WITHDRAWAL_REVERSAL
+  WITHDRAWAL
+  ADJUSTMENT
+}
+
+enum LedgerStatus {
+  PENDING
+  AVAILABLE
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         Role     @default(WORKER)
+  disabled     Boolean  @default(false)
+  kycVerified  Boolean  @default(false)
+  emailVerifiedAt DateTime?
+  // Wird bei Passwortänderung erhöht und macht alte Sitzungen ungültig.
+  tokenVersion Int      @default(0)
+  createdAt    DateTime @default(now())
+  wallet       Wallet?
+  campaigns    Campaign[]
+  submissions  Submission[]
+  purchases    CoinPurchase[]
+  withdrawals  Withdrawal[]
+  authTokens   AuthToken[]
+}
+
+model Wallet {
+  id        String        @id @default(cuid())
+  userId    String        @unique
+  user      User          @relation(fields: [userId], references: [id])
+  entries   LedgerEntry[]
+  createdAt DateTime      @default(now())
+}
+
+// Ledger: nur Einträge hinzufügen, nie ändern oder löschen (außer Status PENDING -> AVAILABLE).
+// amount > 0 = Gutschrift, amount < 0 = Abbuchung. Der Kontostand ist immer die Summe der Einträge.
+model LedgerEntry {
+  id        String       @id @default(cuid())
+  walletId  String
+  wallet    Wallet       @relation(fields: [walletId], references: [id])
+  amount    Int
+  type      LedgerType
+  status    LedgerStatus @default(AVAILABLE)
+  note       String?
+  campaignId String?
+  campaign   Campaign?    @relation(fields: [campaignId], references: [id])
+  // Bei PENDING: ab diesem Zeitpunkt zählt der Eintrag als verfügbar (Wartezeit).
+  availableAt DateTime?
+  createdAt  DateTime     @default(now())
+
+  @@index([walletId, createdAt])
+}
+
+enum CampaignStatus {
+  ACTIVE
+  CLOSED
+}
+
+enum SubmissionStatus {
+  SUBMITTED
+  APPROVED
+  REJECTED
+}
+
+// Beim Start werden rewardCoins * slots vom Guthaben des Auftraggebers gesperrt (ESCROW_LOCK).
+model Campaign {
+  id          String         @id @default(cuid())
+  clientId    String
+  client      User           @relation(fields: [clientId], references: [id])
+  title       String
+  description String
+  rewardCoins Int
+  slots       Int
+  status      CampaignStatus @default(ACTIVE)
+  createdAt   DateTime       @default(now())
+  submissions Submission[]
+  ledger      LedgerEntry[]
+
+  @@index([status, createdAt])
+  @@index([clientId])
+}
+
+model Submission {
+  id         String           @id @default(cuid())
+  campaignId String
+  campaign   Campaign         @relation(fields: [campaignId], references: [id])
+  workerId   String
+  worker     User             @relation(fields: [workerId], references: [id])
+  answer     String
+  status     SubmissionStatus @default(SUBMITTED)
+  createdAt  DateTime         @default(now())
+  reviewedAt DateTime?
+
+  @@unique([campaignId, workerId])
+  @@index([workerId])
+  @@index([status, createdAt])
+}
+
+enum PurchaseStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+enum WithdrawalStatus {
+  REQUESTED
+  PAID
+  REJECTED
+}
+
+// Coin-Kauf durch Auftraggeber. Gutschrift im Ledger erst bei COMPLETED (später per Zahlungs-Webhook).
+model CoinPurchase {
+  id          String         @id @default(cuid())
+  userId      String
+  user        User           @relation(fields: [userId], references: [id])
+  coins       Int
+  amountCents Int
+  provider    String
+  status      PurchaseStatus @default(PENDING)
+  createdAt   DateTime       @default(now())
+  completedAt DateTime?
+
+  @@index([userId, createdAt])
+}
+
+// Auszahlung an Worker. Coins werden bei der Anfrage sofort im Ledger abgebucht.
+model Withdrawal {
+  id           String           @id @default(cuid())
+  userId       String
+  user         User             @relation(fields: [userId], references: [id])
+  coins        Int
+  amountCents  Int
+  payoutTarget String
+  status       WithdrawalStatus @default(REQUESTED)
+  createdAt    DateTime         @default(now())
+  processedAt  DateTime?
+
+  @@index([status, createdAt])
+  @@index([userId, createdAt])
+}
+
+enum AuthTokenType {
+  VERIFY_EMAIL
+  RESET_PASSWORD
+}
+
+// Einmal-Links per E-Mail. Gespeichert wird nur der Hash, nie der Token selbst.
+model AuthToken {
+  id        String        @id @default(cuid())
+  userId    String
+  user      User          @relation(fields: [userId], references: [id])
+  type      AuthTokenType
+  tokenHash String        @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime      @default(now())
+
+  @@index([userId, type])
+}
+
+model RateLimit {
+  key     String   @id
+  count   Int
+  resetAt DateTime
+
+  @@index([resetAt])
+}

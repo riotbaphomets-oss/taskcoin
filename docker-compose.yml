@@ -1,0 +1,22 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: taskcoin
+      POSTGRES_PASSWORD: taskcoin
+      POSTGRES_DB: taskcoin
+    ports:
+      - "5432:5432"
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+  # Eigene Datenbank nur für die automatischen Tests (wird von den Tests geleert!)
+  testdb:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: taskcoin
+      POSTGRES_PASSWORD: taskcoin
+      POSTGRES_DB: taskcoin_test
+    ports:
+      - "5433:5432"
+volumes:
+  dbdata:
